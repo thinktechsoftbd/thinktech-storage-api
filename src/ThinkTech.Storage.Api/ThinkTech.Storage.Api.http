@@ -1,0 +1,65 @@
+# ThinkTech Storage API - manual tests (Visual Studio / Rider / VS Code REST Client)
+# Start the API with the "http" launch profile first.
+# The secrets below belong to DEVELOPMENT-ONLY clients from appsettings.Development.json.
+
+@baseUrl = http://localhost:5059
+@clientId = dev-console
+@clientSecret = bLK4ui1dm5qjj9gyjSTEW7caTGQTFSZVf4AXqTMVQO8
+@readOnlyClientId = dev-readonly
+@readOnlyClientSecret = rLFXIC8D00ve9B3XUrUf8Kh5At5_JL1Y85fflIdiFjY
+
+### Health (anonymous)
+GET {{baseUrl}}/health
+
+### 1. Authenticate: client id + secret -> access token (JSON)
+# @name token
+POST {{baseUrl}}/api/v1/auth/token
+Content-Type: application/json
+
+{
+  "clientId": "{{clientId}}",
+  "clientSecret": "{{clientSecret}}"
+}
+
+### 1b. Authenticate: standard OAuth 2.0 client_credentials form
+POST {{baseUrl}}/api/v1/auth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&client_id={{clientId}}&client_secret={{clientSecret}}
+
+### 2. Upload
+# @name upload
+POST {{baseUrl}}/api/v1/files
+Authorization: Bearer {{token.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=ThinkTechBoundary
+
+--ThinkTechBoundary
+Content-Disposition: form-data; name="file"; filename="invoice-1001.txt"
+Content-Type: text/plain
+
+Hello from the ThinkTech Storage API.
+--ThinkTechBoundary
+Content-Disposition: form-data; name="category"
+
+invoices
+--ThinkTechBoundary
+Content-Disposition: form-data; name="referenceId"
+
+INV-1001
+--ThinkTechBoundary
+Content-Disposition: form-data; name="metadata"
+
+{"customer":"ACME Ltd","branch":"Dhaka"}
+--ThinkTechBoundary--
+
+### 3. Metadata
+GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}/metadata
+Authorization: Bearer {{token.response.body.$.access_token}}
+
+### 4. Download
+GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}
+Authorization: Bearer {{token.response.body.$.access_token}}
+
+### 5. Delete
+DELETE {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}
+Authorization: Bearer {{token.response.body.$.access_token}}

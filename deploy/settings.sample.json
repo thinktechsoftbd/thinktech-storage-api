@@ -1,0 +1,41 @@
+// Template for /etc/thinktech-storage/appsettings.json on the VPS.
+// Replace every <...> value; the API refuses to start while any of them is invalid.
+// This file is watched: adding, removing or disabling a client takes effect without a restart.
+{
+  "Jwt": {
+    // Output of:  /opt/thinktech-storage-api/ThinkTech.Storage.Api generate-signing-key
+    "SigningKey": "<paste generated signing key>"
+  },
+
+  "Storage": {
+    "RootPath": "/var/lib/thinktech-storage"
+  },
+
+  // One entry per application. Create each with:
+  //   /opt/thinktech-storage-api/ThinkTech.Storage.Api generate-client <client-id>
+  "StorageClients": {
+    "Clients": [
+      {
+        "ClientId": "bizone-erp",
+        "DisplayName": "BizOne ERP",
+        "SecretHash": "<paste SecretHash from generate-client bizone-erp>",
+        "Scopes": [ "storage.read", "storage.write", "storage.delete" ],
+        "Enabled": true
+      },
+      {
+        "ClientId": "thinktech-erp",
+        "DisplayName": "ThinkTech ERP",
+        "SecretHash": "<paste SecretHash from generate-client thinktech-erp>",
+        "Scopes": [ "storage.read", "storage.write", "storage.delete" ],
+        "Enabled": true
+      },
+      {
+        "ClientId": "medidesk",
+        "DisplayName": "Medidesk",
+        "SecretHash": "<paste SecretHash from generate-client medidesk>",
+        "Scopes": [ "storage.read", "storage.write" ],
+        "Enabled": true
+      }
+    ]
+  }
+}

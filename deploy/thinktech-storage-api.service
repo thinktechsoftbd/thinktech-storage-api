@@ -1,0 +1,41 @@
+# systemd unit for the ThinkTech Storage API
+# Install:  sudo cp thinktech-storage-api.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now thinktech-storage-api
+# Logs:     sudo journalctl -u thinktech-storage-api -f
+
+[Unit]
+Description=ThinkTech Storage API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=thinktech-storage
+Group=thinktech-storage
+WorkingDirectory=/opt/thinktech-storage-api
+ExecStart=/opt/thinktech-storage-api/ThinkTech.Storage.Api
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=thinktech-storage-api
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+# Only reachable from nginx on the same machine - never expose this port publicly.
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5080
+Environment=DOTNET_NOLOGO=true
+# Secrets (signing key, client secret hashes) live outside the deployment folder.
+Environment=THINKTECH_STORAGE_SETTINGS=/etc/thinktech-storage/appsettings.json
+
+# Hardening: the service can write only to the storage folder.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/thinktech-storage
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
