@@ -1,6 +1,6 @@
 # ThinkTech Storage API - manual tests (Visual Studio / Rider / VS Code REST Client)
 # Start the API with the "http" launch profile first.
-# The secrets below belong to DEVELOPMENT-ONLY clients from appsettings.Development.json.
+# The secrets below belong to the DEVELOPMENT-ONLY clients in appsettings.json (not published to the server).
 
 @baseUrl = http://localhost:5059
 @clientId = dev-console

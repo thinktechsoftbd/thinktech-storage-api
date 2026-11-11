@@ -22,9 +22,10 @@ var builder = WebApplication.CreateBuilder(args);
 // Configuration
 // ---------------------------------------------------------------------------
 
-// On the server, secrets (signing key, client secret hashes) live in a file outside the deployment
-// folder, e.g. /etc/thinktech-storage/appsettings.json. It is reloaded on change, so clients can be
-// added or disabled without a restart.
+// appsettings.json holds local development settings and is not published. On the server, the complete
+// configuration (signing key, client secret hashes, storage path, limits) lives in a file outside the
+// deployment folder, e.g. /etc/thinktech-storage/appsettings.json. It is reloaded on change, so clients
+// can be added or disabled without a restart.
 var externalSettingsPath = Environment.GetEnvironmentVariable("THINKTECH_STORAGE_SETTINGS");
 if (!string.IsNullOrWhiteSpace(externalSettingsPath))
 {

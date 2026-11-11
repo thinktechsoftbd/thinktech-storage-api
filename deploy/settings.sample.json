@@ -1,14 +1,36 @@
-// Template for /etc/thinktech-storage/appsettings.json on the VPS.
-// Replace every <...> value; the API refuses to start while any of them is invalid.
+// Complete production settings: copy to /etc/thinktech-storage/appsettings.json on the VPS.
+// The project's own appsettings.json (local development) is not published, so everything the
+// server needs is in this file. Replace every <...> value; the API refuses to start while any is invalid.
 // This file is watched: adding, removing or disabling a client takes effect without a restart.
 {
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      // Data Protection is not used by this API (no cookies); hide its key-storage warnings on Linux.
+      "Microsoft.AspNetCore.DataProtection": "Error"
+    }
+  },
+  "AllowedHosts": "*",
+
   "Jwt": {
+    "Issuer": "thinktech-storage-api",
+    "Audience": "thinktech-storage-clients",
     // Output of:  /opt/thinktech-storage-api/ThinkTech.Storage.Api generate-signing-key
-    "SigningKey": "<paste generated signing key>"
+    "SigningKey": "fryPVMMWEVkah7upvYkOVDxnb/fUZrmMXwaWAV0vHxZP4u/JwRQm7S223TerPKJ6/E7FJ2aWbS+1fRWTFIeaiQ==",
+    "AccessTokenMinutes": 60
   },
 
   "Storage": {
-    "RootPath": "/var/lib/thinktech-storage"
+    "RootPath": "/srv/storage",
+    // 100 MB. Keep nginx client_max_body_size above this.
+    "MaxFileSizeBytes": 104857600,
+    // Empty list = any file type is accepted.
+    "AllowedExtensions": [
+      ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".rtf", ".txt", ".csv",
+      ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic",
+      ".xml", ".json", ".zip", ".7z", ".dcm"
+    ]
   },
 
   // One entry per application. Create each with:
@@ -18,21 +40,21 @@
       {
         "ClientId": "bizone-erp",
         "DisplayName": "BizOne ERP",
-        "SecretHash": "<paste SecretHash from generate-client bizone-erp>",
+        "SecretHash": "pbkdf2-sha256.100000.mGRXUjb1wsHU2CvF7MmfoQ.MagxUXmJR53aXMtHtYcTlUsj276R36aFV_Rkk-ktynY",
         "Scopes": [ "storage.read", "storage.write", "storage.delete" ],
         "Enabled": true
       },
       {
         "ClientId": "thinktech-erp",
         "DisplayName": "ThinkTech ERP",
-        "SecretHash": "<paste SecretHash from generate-client thinktech-erp>",
+        "SecretHash": "pbkdf2-sha256.100000.Av_HtqSudXQO-K69OrJsJg.cDfeXzppvn1xwj_6RQku3ZAmli-NzmUk6GYj2eY6Aaw",
         "Scopes": [ "storage.read", "storage.write", "storage.delete" ],
         "Enabled": true
       },
       {
         "ClientId": "medidesk",
         "DisplayName": "Medidesk",
-        "SecretHash": "<paste SecretHash from generate-client medidesk>",
+        "SecretHash": "pbkdf2-sha256.100000.jZTk1T43YcAdKoW3Gvs75Q.d30e3juCUvQY3D_T3Eo3ss2palVFXkNODA5VqJjePqg",
         "Scopes": [ "storage.read", "storage.write" ],
         "Enabled": true
       }

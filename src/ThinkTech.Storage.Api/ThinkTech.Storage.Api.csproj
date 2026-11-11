@@ -15,8 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Development settings (dev signing key, dev client) must never reach the server. -->
-    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <!-- appsettings.json holds the local dev signing key and dev clients: it must never reach the server.
+         The server reads its full configuration from THINKTECH_STORAGE_SETTINGS (deploy/settings.sample.json). -->
+    <Content Update="appsettings.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
 </Project>

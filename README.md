@@ -120,10 +120,14 @@ dotnet run --project src/ThinkTech.Storage.Api --launch-profile http
 ```
 
 The API listens on `http://localhost:5059` and stores files in `src/ThinkTech.Storage.Api/App_Data/storage`
-(git-ignored). `appsettings.Development.json` contains two **development-only** clients
-(`dev-console` with full access, `dev-readonly` with read only). Their secrets are in
+(git-ignored). [`appsettings.json`](src/ThinkTech.Storage.Api/appsettings.json) is the local development
+configuration: a dev signing key and two **development-only** clients (`dev-console` with full access,
+`dev-readonly` with read only). Their secrets are in
 [`ThinkTech.Storage.Api.http`](src/ThinkTech.Storage.Api/ThinkTech.Storage.Api.http), which walks through
-token → upload → metadata → download → delete. The development file is never published to the server.
+token → upload → metadata → download → delete.
+
+`appsettings.json` is **excluded from `dotnet publish`**, so the dev key and dev clients never reach the
+server. The server gets its own complete settings file (see [Deploy](#deploy-to-the-vps-ubuntu--debian)).
 
 ## Managing clients
 
@@ -222,7 +226,8 @@ scp -r publish <admin-user>@<vps-ip>:~/thinktech-storage/
 ssh <admin-user>@<vps-ip> "sudo cp -r ~/thinktech-storage/publish/* /opt/thinktech-storage-api/ && sudo systemctl restart thinktech-storage-api"
 ```
 
-Settings and stored files are outside `/opt/thinktech-storage-api`, so redeploys never touch them.
+Settings and stored files are outside `/opt/thinktech-storage-api`, and the publish output contains no
+`appsettings.json`, so redeploys never touch the server's configuration or documents.
 
 ### Server hardening checklist
 
@@ -237,22 +242,25 @@ Settings and stored files are outside `/opt/thinktech-storage-api`, so redeploys
 
 ## Configuration
 
-| Key | Default | Notes |
+There are two settings files, one per environment, and they are never combined:
+
+| File | Used by | Contains |
 |---|---|---|
-| `Jwt:SigningKey` | – (required) | ≥ 32 chars, from `generate-signing-key` |
+| [`src/ThinkTech.Storage.Api/appsettings.json`](src/ThinkTech.Storage.Api/appsettings.json) | Local runs (`dotnet run`, Visual Studio) | Dev signing key, dev clients, `App_Data/storage`. **Not published.** |
+| [`deploy/settings.sample.json`](deploy/settings.sample.json) → `/etc/thinktech-storage/appsettings.json` | The VPS (via `THINKTECH_STORAGE_SETTINGS`) | Complete production settings: real signing key, real client hashes |
+
+Environment variables override either file (e.g. `Jwt__SigningKey`). The API validates everything at
+startup and refuses to run with a missing key or a malformed client.
+
+| Key | Server value | Notes |
+|---|---|---|
+| `Jwt:SigningKey` | from `generate-signing-key` | Required, ≥ 32 chars |
 | `Jwt:AccessTokenMinutes` | `60` | Token lifetime |
 | `Jwt:Issuer` / `Jwt:Audience` | `thinktech-storage-api` / `thinktech-storage-clients` | |
-| `Storage:RootPath` | `/var/lib/thinktech-storage` | Relative paths resolve from the app folder |
+| `Storage:RootPath` | `/var/lib/thinktech-storage` | Required. Relative paths resolve from the app folder (local: `App_Data/storage`) |
 | `Storage:MaxFileSizeBytes` | `104857600` (100 MB) | Keep nginx `client_max_body_size` above this |
-| `Storage:AllowedExtensions` | office, PDF, images, xml/json, zip/7z, dcm | Empty list = allow all |
-| `StorageClients:Clients` | `[]` | `ClientId`, `DisplayName`, `SecretHash`, `Scopes`, `Enabled` |
-
-On the server, values come from `appsettings.json` in the app folder, overridden by the file in
-`THINKTECH_STORAGE_SETTINGS`, overridden by environment variables (e.g. `Jwt__SigningKey`).
-The API validates all of it at startup and refuses to run with a missing key or a malformed client.
-
-> Note: .NET merges JSON arrays by index. If you override `AllowedExtensions` in the server file,
-> list at least as many entries as the default, or set the full list there.
+| `Storage:AllowedExtensions` | office, PDF, images, xml/json, zip/7z, dcm | Empty list or omitted = allow all |
+| `StorageClients:Clients` | one entry per app | `ClientId`, `DisplayName`, `SecretHash`, `Scopes`, `Enabled` |
 
 ### Storage layout
 

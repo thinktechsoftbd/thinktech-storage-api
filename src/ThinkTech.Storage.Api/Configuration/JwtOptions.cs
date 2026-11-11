@@ -17,7 +17,7 @@ public sealed class JwtOptions
     /// HMAC-SHA256 signing key. Generate one with <c>ThinkTech.Storage.Api generate-signing-key</c>
     /// and keep it out of source control.
     /// </summary>
-    [Required(ErrorMessage = "Jwt:SigningKey is required. Generate one with 'generate-signing-key'.")]
+    [Required(ErrorMessage = "Jwt:SigningKey is required. Generate one with 'generate-signing-key' and put it in the settings file named by THINKTECH_STORAGE_SETTINGS.")]
     [MinLength(32, ErrorMessage = "Jwt:SigningKey must be at least 32 characters long.")]
     public string SigningKey { get; set; } = string.Empty;
 
