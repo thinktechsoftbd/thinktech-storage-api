@@ -32,14 +32,19 @@ SSH stays an admin-only door.
 | Method | Route | Scope | Description |
 |---|---|---|---|
 | `POST` | `/api/v1/auth/token` | – (anonymous) | Exchange client id + secret for a bearer token (valid 60 min) |
-| `POST` | `/api/v1/files` | `storage.write` | Upload (multipart: `file`, optional `category`, `referenceId`, `metadata` JSON) |
-| `GET` | `/api/v1/files/{id}` | `storage.read` | Download (supports `Range` for resumable downloads, `ETag` = SHA-256) |
-| `GET` | `/api/v1/files/{id}/metadata` | `storage.read` | File name, size, content type, SHA-256, category, reference, metadata, upload time |
-| `DELETE` | `/api/v1/files/{id}` | `storage.delete` | Delete a file |
+| `POST` | `/api/v1/files` | `storage.write` | Upload (multipart: `file`, optional `filePartialPath`, `category`, `referenceId`, `metadata` JSON) |
+| `GET` | `/api/v1/files/{id}.{ext}` | `storage.read` | Download (supports `Range` for resumable downloads, `ETag` = SHA-256) |
+| `GET` | `/api/v1/files/{id}.{ext}/metadata` | `storage.read` | Stored name, folder, original file name, size, content type, SHA-256, category, reference, metadata, upload time |
+| `DELETE` | `/api/v1/files/{id}.{ext}` | `storage.delete` | Delete a file |
 | `GET` | `/health` | – (anonymous) | `Healthy` when the storage folder is writable |
 
 - **Isolation:** every client has its own folder. A client can never read or delete another client's files; it gets `404`.
-- **Your app keeps the file id.** Upload returns an `id` (32 hex chars). Store it in your ERP database next to the invoice, patient, etc.
+- **Folders:** send `filePartialPath` (e.g. `invoices/2026/11`) and the file is stored at
+  `{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}`. Without it, the file goes directly in the client's folder.
+  Folder names may contain letters, digits, spaces, `.`, `-` and `_`; `..` and hidden folders are rejected (`400`).
+- **Your app keeps the `storedFileName`.** Upload returns `storedFileName` (`{id}.{ext}`, e.g. `7964b4d0...832.jpg`)
+  and `id`. Store it in your ERP database next to the invoice, patient, etc. GET and DELETE need only that name; the
+  server remembers the folder. The bare `id` works too, and a wrong extension returns `404`.
 - Errors use RFC 7807 `application/problem+json`. Status codes: `401` bad/missing token, `403` missing scope, `404` not found, `413` too large, `415` file type not allowed.
 
 ### Authentication flow
@@ -88,6 +93,7 @@ await using var source = File.OpenRead(@"C:\docs\invoice-1001.pdf");
 using var form = new MultipartFormDataContent
 {
     { new StreamContent(source), "file", "invoice-1001.pdf" },
+    { new StringContent("invoices/2026/11"), "filePartialPath" },
     { new StringContent("invoices"), "category" },
     { new StringContent("INV-1001"), "referenceId" },
     { new StringContent("""{"customer":"ACME Ltd"}"""), "metadata" },
@@ -95,20 +101,20 @@ using var form = new MultipartFormDataContent
 var upload = await http.PostAsync("api/v1/files", form);
 upload.EnsureSuccessStatusCode();
 var stored = await upload.Content.ReadFromJsonAsync<StoredFile>();
-Console.WriteLine($"Stored as {stored!.Id}");          // save this id in your database
+Console.WriteLine($"Stored as {stored!.StoredFileName}");  // e.g. 7964b4d0...832.pdf - save it in your database
 
 // 3. Download
-await using (var download = await http.GetStreamAsync($"api/v1/files/{stored.Id}"))
+await using (var download = await http.GetStreamAsync($"api/v1/files/{stored.StoredFileName}"))
 await using (var target = File.Create(@"C:\temp\invoice-1001.pdf"))
 {
     await download.CopyToAsync(target);
 }
 
 // 4. Delete
-(await http.DeleteAsync($"api/v1/files/{stored.Id}")).EnsureSuccessStatusCode();
+(await http.DeleteAsync($"api/v1/files/{stored.StoredFileName}")).EnsureSuccessStatusCode();
 
 record TokenResponse(string access_token, string token_type, int expires_in, string scope);
-record StoredFile(string Id, string FileName, string ContentType, long SizeBytes, string Sha256);
+record StoredFile(string Id, string StoredFileName, string? FilePartialPath, string FileName, string ContentType, long SizeBytes, string Sha256);
 ```
 
 ---
@@ -267,14 +273,21 @@ startup and refuses to run with a missing key or a malformed client.
 ```
 /var/lib/thinktech-storage/
   bizone-erp/
-    3f/a1/3fa1c0...e9.bin     <- file content (name on disk is the server-generated id)
-    3f/a1/3fa1c0...e9.json    <- metadata: original name, size, SHA-256, category, reference, ...
+    invoices/2026/11/
+      3fa1c0...e9.jpg         <- file content: server-generated id + the uploaded file's extension
+    .metadata/3f/a1/
+      3fa1c0...e9.json        <- metadata: folder, original name, size, SHA-256, category, reference, ...
   medidesk/
     ...
 ```
 
-Names on disk are never taken from user input, so path traversal is impossible. The two levels of shard
-folders keep directories small even with millions of files.
+The content file is stored unchanged (not encrypted), so it opens directly with its extension. A file without
+a usable extension is stored as `{id}.bin`. The hidden `.metadata` index records where each file lives, which is
+how GET and DELETE find a file by `{id}.{ext}` alone; its two levels of shard folders stay small even with
+millions of files.
+
+The folder comes from the validated `filePartialPath` (safe names only, always inside the client's folder) and
+the file name is a server-generated id, so path traversal is impossible.
 
 ## Project structure
 

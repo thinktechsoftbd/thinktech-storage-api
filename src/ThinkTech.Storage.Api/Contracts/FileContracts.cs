@@ -9,6 +9,13 @@ public sealed class UploadFileRequest
     [Required]
     public IFormFile? File { get; set; }
 
+    /// <summary>
+    /// Optional folder inside the client's storage folder, e.g. <c>invoices/2026/11</c>. The file is stored at
+    /// <c>{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}</c>; when omitted, directly in the client's folder.
+    /// </summary>
+    [MaxLength(255)]
+    public string? FilePartialPath { get; set; }
+
     /// <summary>Optional free-text grouping, e.g. "invoices", "patient-reports".</summary>
     [MaxLength(100)]
     public string? Category { get; set; }
@@ -22,8 +29,12 @@ public sealed class UploadFileRequest
     public string? Metadata { get; set; }
 }
 
+/// <param name="StoredFileName">Name on disk, <c>{id}.{ext}</c>; use it in <c>GET/DELETE /api/v1/files/{StoredFileName}</c>.</param>
+/// <param name="FilePartialPath">Folder the file was stored in (normalized), or null for the client's root folder.</param>
 public sealed record FileMetadataResponse(
     string Id,
+    string StoredFileName,
+    string? FilePartialPath,
     string FileName,
     string ContentType,
     long SizeBytes,
@@ -35,6 +46,8 @@ public sealed record FileMetadataResponse(
 {
     public static FileMetadataResponse From(StoredFileMetadata file) => new(
         file.Id,
+        file.StoredFileName,
+        file.FilePartialPath,
         file.FileName,
         file.ContentType,
         file.SizeBytes,

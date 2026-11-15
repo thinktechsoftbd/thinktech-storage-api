@@ -8,12 +8,18 @@ namespace ThinkTech.Storage.Api.Storage;
 
 /// <summary>
 /// Stores documents on the local file system:
-/// <c>{RootPath}/{clientId}/{id[0..2]}/{id[2..4]}/{id}.bin</c> plus <c>{id}.json</c> metadata.
-/// File names on disk are server-generated ids, never user input, so path traversal is impossible.
+/// <list type="bullet">
+///   <item>content: <c>{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}</c>, e.g. <c>bizone-erp/invoices/2026/11/{id}.jpg</c></item>
+///   <item>metadata: <c>{RootPath}/{clientId}/.metadata/{id[0..2]}/{id[2..4]}/{id}.json</c>. It records where the
+///   content is, so a file is found by its id alone.</item>
+/// </list>
+/// The partial path only accepts safe folder names (no "..", no hidden folders) and the file name is a server-generated
+/// id plus a validated extension, so nothing can be written outside the client's own folder.
 /// </summary>
 public sealed class LocalFileStorage : IFileStorage
 {
-    private const string DataExtension = ".bin";
+    private const string MetadataFolder = ".metadata";
+    private const string FallbackDataExtension = ".bin";
     private const string MetadataExtension = ".json";
     private const string TempExtension = ".tmp";
     private const int CopyBufferSize = 81920;
@@ -35,10 +41,13 @@ public sealed class LocalFileStorage : IFileStorage
         string clientId, Stream content, FileUploadInfo upload, CancellationToken cancellationToken)
     {
         var fileId = Guid.NewGuid().ToString("N");
-        var paths = GetPaths(clientId, fileId);
-        var tempDataPath = paths.Data + TempExtension;
+        var metadataPath = GetMetadataPath(clientId, fileId);
+        var dataFileName = GetDataFileName(fileId, upload.FileName);
+        var dataPath = GetDataPath(clientId, upload.FilePartialPath, dataFileName);
+        var tempDataPath = dataPath + TempExtension;
 
-        Directory.CreateDirectory(paths.Directory);
+        Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(metadataPath)!);
 
         try
         {
@@ -56,6 +65,8 @@ public sealed class LocalFileStorage : IFileStorage
             {
                 Id = fileId,
                 ClientId = clientId,
+                StoredFileName = dataFileName,
+                FilePartialPath = upload.FilePartialPath.Length == 0 ? null : upload.FilePartialPath,
                 FileName = upload.FileName,
                 ContentType = upload.ContentType,
                 SizeBytes = size,
@@ -67,28 +78,28 @@ public sealed class LocalFileStorage : IFileStorage
             };
 
             // The data file is moved into place first; a file only "exists" once its metadata is written.
-            File.Move(tempDataPath, paths.Data);
-            await WriteMetadataAsync(paths.Metadata, metadata, cancellationToken);
+            File.Move(tempDataPath, dataPath);
+            await WriteMetadataAsync(metadataPath, metadata, cancellationToken);
 
             return metadata;
         }
         catch
         {
             TryDelete(tempDataPath);
-            TryDelete(paths.Metadata + TempExtension);
-            TryDelete(paths.Metadata);
-            TryDelete(paths.Data);
+            TryDelete(metadataPath + TempExtension);
+            TryDelete(metadataPath);
+            TryDelete(dataPath);
             throw;
         }
     }
 
     public async Task<StoredFileMetadata?> GetMetadataAsync(string clientId, string fileId, CancellationToken cancellationToken)
     {
-        var paths = GetPaths(clientId, fileId);
+        var metadataPath = GetMetadataPath(clientId, fileId);
 
         try
         {
-            await using var stream = new FileStream(paths.Metadata, FileMode.Open, FileAccess.Read,
+            await using var stream = new FileStream(metadataPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read | FileShare.Delete, bufferSize: 4096, FileOptions.Asynchronous);
             var metadata = await JsonSerializer.DeserializeAsync<StoredFileMetadata>(stream, JsonOptions, cancellationToken);
 
@@ -112,7 +123,8 @@ public sealed class LocalFileStorage : IFileStorage
 
         try
         {
-            var stream = new FileStream(GetPaths(clientId, fileId).Data, FileMode.Open, FileAccess.Read,
+            var dataPath = GetDataPath(clientId, metadata.FilePartialPath, metadata.StoredFileName);
+            var stream = new FileStream(dataPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read | FileShare.Delete, bufferSize: 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
             return new StoredFileContent(metadata, stream);
         }
@@ -122,38 +134,82 @@ public sealed class LocalFileStorage : IFileStorage
         }
     }
 
-    public Task<bool> DeleteAsync(string clientId, string fileId, CancellationToken cancellationToken)
+    public async Task<bool> DeleteAsync(string clientId, string fileId, CancellationToken cancellationToken)
     {
-        var paths = GetPaths(clientId, fileId);
-        if (!File.Exists(paths.Metadata))
+        var metadata = await GetMetadataAsync(clientId, fileId, cancellationToken);
+        if (metadata is null)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         // Metadata first, so a half-finished delete never leaves a visible file without content.
-        File.Delete(paths.Metadata);
-        File.Delete(paths.Data);
-        return Task.FromResult(true);
+        File.Delete(GetMetadataPath(clientId, fileId));
+        File.Delete(GetDataPath(clientId, metadata.FilePartialPath, metadata.StoredFileName));
+        return true;
     }
 
-    private FilePaths GetPaths(string clientId, string fileId)
+    private string GetClientRoot(string clientId)
     {
         if (!StorageIdentifiers.ClientId().IsMatch(clientId))
         {
             throw new ArgumentException("Invalid client id.", nameof(clientId));
         }
 
+        return Path.Combine(RootPath, clientId);
+    }
+
+    /// <summary>Two levels of 256 shard folders keep the metadata index small even with millions of files.</summary>
+    private string GetMetadataPath(string clientId, string fileId)
+    {
         if (!StorageIdentifiers.FileId().IsMatch(fileId))
         {
             throw new ArgumentException("Invalid file id.", nameof(fileId));
         }
 
-        // Two levels of 256 shard folders keep directory sizes small even with millions of files.
-        var directory = Path.Combine(RootPath, clientId, fileId[..2], fileId[2..4]);
-        return new FilePaths(
-            directory,
-            Path.Combine(directory, fileId + DataExtension),
-            Path.Combine(directory, fileId + MetadataExtension));
+        return Path.Combine(GetClientRoot(clientId), MetadataFolder, fileId[..2], fileId[2..4], fileId + MetadataExtension);
+    }
+
+    /// <summary><c>{RootPath}/{clientId}/{filePartialPath}/{dataFileName}</c>, guaranteed to stay inside the client's folder.</summary>
+    private string GetDataPath(string clientId, string? filePartialPath, string dataFileName)
+    {
+        if (!StorageIdentifiers.DataFileName().IsMatch(dataFileName))
+        {
+            throw new InvalidDataException($"Invalid stored file name '{dataFileName}'.");
+        }
+
+        if (!FilePartialPathParser.TryNormalize(filePartialPath, out var normalized, out _) ||
+            !string.Equals(normalized, filePartialPath ?? string.Empty, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Invalid file partial path '{filePartialPath}'.");
+        }
+
+        var clientRoot = GetClientRoot(clientId);
+        var parts = new List<string> { clientRoot };
+        if (normalized.Length > 0)
+        {
+            parts.AddRange(normalized.Split('/'));
+        }
+
+        parts.Add(dataFileName);
+        var fullPath = Path.GetFullPath(Path.Combine(parts.ToArray()));
+
+        // Defense in depth: the validation above already rules this out.
+        if (!fullPath.StartsWith(clientRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The file path resolves outside the client's folder.");
+        }
+
+        return fullPath;
+    }
+
+    /// <summary>
+    /// The data file keeps the uploaded file's extension (lowercased): <c>{id}.jpg</c>, <c>{id}.pdf</c>, ...
+    /// A missing or unusual extension (not short and alphanumeric) falls back to <c>{id}.bin</c>.
+    /// </summary>
+    private static string GetDataFileName(string fileId, string fileName)
+    {
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        return fileId + (StorageIdentifiers.DataExtension().IsMatch(extension) ? extension : FallbackDataExtension);
     }
 
     private static async Task<(long Size, string Sha256)> CopyAndHashAsync(
@@ -208,6 +264,4 @@ public sealed class LocalFileStorage : IFileStorage
         {
         }
     }
-
-    private readonly record struct FilePaths(string Directory, string Data, string Metadata);
 }

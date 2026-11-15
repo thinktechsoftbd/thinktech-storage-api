@@ -39,6 +39,10 @@ Content-Type: text/plain
 
 Hello from the ThinkTech Storage API.
 --ThinkTechBoundary
+Content-Disposition: form-data; name="filePartialPath"
+
+invoices/2026/11
+--ThinkTechBoundary
 Content-Disposition: form-data; name="category"
 
 invoices
@@ -52,14 +56,14 @@ Content-Disposition: form-data; name="metadata"
 {"customer":"ACME Ltd","branch":"Dhaka"}
 --ThinkTechBoundary--
 
-### 3. Metadata
-GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}/metadata
+### 3. Metadata  (storedFileName = {id}.{ext}; the server knows the folder)
+GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.storedFileName}}/metadata
 Authorization: Bearer {{token.response.body.$.access_token}}
 
 ### 4. Download
-GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}
+GET {{baseUrl}}/api/v1/files/{{upload.response.body.$.storedFileName}}
 Authorization: Bearer {{token.response.body.$.access_token}}
 
 ### 5. Delete
-DELETE {{baseUrl}}/api/v1/files/{{upload.response.body.$.id}}
+DELETE {{baseUrl}}/api/v1/files/{{upload.response.body.$.storedFileName}}
 Authorization: Bearer {{token.response.body.$.access_token}}

@@ -44,6 +44,53 @@ public static class FileNameSanitizer
     }
 }
 
+/// <summary>
+/// Validates and normalizes the caller's <c>filePartialPath</c>, e.g. <c>"\invoices\2026//11/"</c> becomes
+/// <c>"invoices/2026/11"</c>. Only safe folder names are accepted, so the path can never leave the client's folder.
+/// </summary>
+public static class FilePartialPathParser
+{
+    private const int MaxLength = 255;
+    private const int MaxSegments = 10;
+
+    public static bool TryNormalize(string? value, out string normalized, out string? error)
+    {
+        normalized = string.Empty;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        var segments = value.Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (segments.Length > MaxSegments)
+        {
+            error = $"filePartialPath can contain at most {MaxSegments} folders.";
+            return false;
+        }
+
+        if (!segments.All(s => StorageIdentifiers.PathSegment().IsMatch(s)))
+        {
+            error = "filePartialPath folder names may contain letters, digits, spaces, '.', '-' and '_' (max 100 characters), " +
+                    "must start and end with a letter, digit, '-' or '_', and cannot be '.' or '..'. Example: invoices/2026/11";
+            return false;
+        }
+
+        var joined = string.Join('/', segments);
+        if (joined.Length > MaxLength)
+        {
+            error = $"filePartialPath can be at most {MaxLength} characters.";
+            return false;
+        }
+
+        normalized = joined;
+        return true;
+    }
+}
+
 public static class UploadMetadataParser
 {
     private const int MaxEntries = 32;
