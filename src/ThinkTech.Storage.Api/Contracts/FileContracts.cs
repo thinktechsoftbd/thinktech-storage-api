@@ -15,45 +15,32 @@ public sealed class UploadFileRequest
     /// </summary>
     [MaxLength(255)]
     public string? FilePartialPath { get; set; }
-
-    /// <summary>Optional free-text grouping, e.g. "invoices", "patient-reports".</summary>
-    [MaxLength(100)]
-    public string? Category { get; set; }
-
-    /// <summary>Optional id from the calling system, e.g. an invoice number or patient id.</summary>
-    [MaxLength(200)]
-    public string? ReferenceId { get; set; }
-
-    /// <summary>Optional JSON object of string key/value pairs, e.g. <c>{"invoiceNo":"INV-1001"}</c>.</summary>
-    [MaxLength(8192)]
-    public string? Metadata { get; set; }
 }
 
-/// <param name="StoredFileName">Name on disk, <c>{id}.{ext}</c>; use it in <c>GET/DELETE /api/v1/files/{StoredFileName}</c>.</param>
-/// <param name="FilePartialPath">Folder the file was stored in (normalized), or null for the client's root folder.</param>
-public sealed record FileMetadataResponse(
+/// <summary>Returned by <c>POST /api/v1/files</c>. Save <see cref="FilePath"/>: GET and DELETE need it.</summary>
+/// <param name="FilePath">
+/// <c>{filePartialPath}/{id}.{ext}</c>, e.g. <c>invoices/2026/11/7964b4d0...832.jpg</c>.
+/// Use it as <c>GET/DELETE /api/v1/files/{FilePath}</c>.
+/// </param>
+/// <param name="FileName">Name on disk, <c>{id}.{ext}</c>. Downloads are served under this name.</param>
+/// <param name="OriginalFileName">The name the file was uploaded with. It is not stored on the server.</param>
+public sealed record UploadFileResponse(
     string Id,
-    string StoredFileName,
-    string? FilePartialPath,
+    string FilePath,
     string FileName,
+    string OriginalFileName,
     string ContentType,
     long SizeBytes,
     string Sha256,
-    string? Category,
-    string? ReferenceId,
-    IReadOnlyDictionary<string, string> Metadata,
     DateTimeOffset UploadedAtUtc)
 {
-    public static FileMetadataResponse From(StoredFileMetadata file) => new(
+    public static UploadFileResponse From(StoredFile file, string originalFileName, string contentType) => new(
         file.Id,
-        file.StoredFileName,
-        file.FilePartialPath,
+        file.FilePath,
         file.FileName,
-        file.ContentType,
+        originalFileName,
+        contentType,
         file.SizeBytes,
         file.Sha256,
-        file.Category,
-        file.ReferenceId,
-        file.Metadata,
         file.UploadedAtUtc);
 }

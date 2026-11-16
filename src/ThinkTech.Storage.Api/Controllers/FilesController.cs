@@ -10,7 +10,10 @@ using ThinkTech.Storage.Api.Storage;
 
 namespace ThinkTech.Storage.Api.Controllers;
 
-/// <summary>Upload, download, delete and inspect documents. Each client only ever sees its own files.</summary>
+/// <summary>
+/// Upload, download and delete documents. Only the file itself is stored, at
+/// <c>{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}</c>. Each client only ever sees its own files.
+/// </summary>
 [ApiController]
 [Route("api/v1/files")]
 [Authorize]
@@ -24,7 +27,7 @@ public sealed class FilesController(
     [HttpPost]
     [Authorize(Policy = StoragePolicies.Write)]
     [Consumes("multipart/form-data")]
-    [ProducesResponseType<FileMetadataResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<UploadFileResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status413PayloadTooLarge)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status415UnsupportedMediaType)]
@@ -44,8 +47,8 @@ public sealed class FilesController(
                 detail: $"The maximum file size is {options.MaxFileSizeBytes:N0} bytes.");
         }
 
-        var fileName = FileNameSanitizer.Sanitize(file.FileName);
-        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        var originalFileName = FileNameSanitizer.Sanitize(file.FileName);
+        var extension = Path.GetExtension(originalFileName).ToLowerInvariant();
         if (options.AllowedExtensions.Length > 0 &&
             !options.AllowedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
         {
@@ -53,144 +56,76 @@ public sealed class FilesController(
                 detail: $"Files of type '{extension}' are not accepted.");
         }
 
-        if (!UploadMetadataParser.TryParse(request.Metadata, out var metadata, out var metadataError))
-        {
-            return InvalidField(nameof(UploadFileRequest.Metadata), metadataError!);
-        }
-
         if (!FilePartialPathParser.TryNormalize(request.FilePartialPath, out var partialPath, out var partialPathError))
         {
             return InvalidField(nameof(UploadFileRequest.FilePartialPath), partialPathError!);
         }
 
-        // Content type comes from the extension, not from the caller, so a client cannot label a file as something else.
-        var contentType = ContentTypes.TryGetContentType(fileName, out var detected) ? detected : "application/octet-stream";
         var clientId = User.GetClientId();
 
         await using var content = file.OpenReadStream();
-        var stored = await storage.SaveAsync(
-            clientId,
-            content,
-            new FileUploadInfo(partialPath, fileName, contentType, Normalize(request.Category), Normalize(request.ReferenceId), metadata),
-            cancellationToken);
+        var stored = await storage.SaveAsync(clientId, content, partialPath, extension, cancellationToken);
 
-        logger.LogInformation("Client {ClientId} uploaded file {StoredFileName} to '{FilePartialPath}' ({FileName}, {SizeBytes} bytes)",
-            clientId, stored.StoredFileName, stored.FilePartialPath ?? string.Empty, stored.FileName, stored.SizeBytes);
+        logger.LogInformation("Client {ClientId} uploaded {FilePath} ({OriginalFileName}, {SizeBytes} bytes)",
+            clientId, stored.FilePath, originalFileName, stored.SizeBytes);
 
-        return CreatedAtAction(nameof(GetMetadata), new { file = stored.StoredFileName }, FileMetadataResponse.From(stored));
-    }
-
-    /// <summary>Downloads a file. <paramref name="file"/> is the <c>storedFileName</c> from the upload, e.g. <c>{id}.jpg</c> (the bare id works too).</summary>
-    [HttpGet("{file}")]
-    [Authorize(Policy = StoragePolicies.Read)]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Download(string file, CancellationToken cancellationToken)
-    {
-        if (!TryParseFileReference(file, out var fileId, out var extension))
-        {
-            return NotFound();
-        }
-
-        var clientId = User.GetClientId();
-        var result = await storage.OpenReadAsync(clientId, fileId, cancellationToken);
-        if (result is null)
-        {
-            return NotFound();
-        }
-
-        var (metadata, content) = result;
-        if (!ExtensionMatches(metadata, extension))
-        {
-            await content.DisposeAsync();
-            return NotFound();
-        }
-
-        logger.LogInformation("Client {ClientId} downloaded file {StoredFileName}", clientId, metadata.StoredFileName);
-
-        // FileStreamResult disposes the stream; range requests allow resumable downloads.
-        return File(content, metadata.ContentType, metadata.FileName, metadata.UploadedAtUtc,
-            new EntityTagHeaderValue($"\"{metadata.Sha256}\""), enableRangeProcessing: true);
-    }
-
-    [HttpGet("{file}/metadata")]
-    [Authorize(Policy = StoragePolicies.Read)]
-    [ProducesResponseType<FileMetadataResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetMetadata(string file, CancellationToken cancellationToken)
-    {
-        if (!TryParseFileReference(file, out var fileId, out var extension))
-        {
-            return NotFound();
-        }
-
-        var metadata = await storage.GetMetadataAsync(User.GetClientId(), fileId, cancellationToken);
-        return metadata is not null && ExtensionMatches(metadata, extension)
-            ? Ok(FileMetadataResponse.From(metadata))
-            : NotFound();
-    }
-
-    [HttpDelete("{file}")]
-    [Authorize(Policy = StoragePolicies.Delete)]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(string file, CancellationToken cancellationToken)
-    {
-        if (!TryParseFileReference(file, out var fileId, out var extension))
-        {
-            return NotFound();
-        }
-
-        var clientId = User.GetClientId();
-        var metadata = await storage.GetMetadataAsync(clientId, fileId, cancellationToken);
-        if (metadata is null || !ExtensionMatches(metadata, extension) ||
-            !await storage.DeleteAsync(clientId, fileId, cancellationToken))
-        {
-            return NotFound();
-        }
-
-        logger.LogInformation("Client {ClientId} deleted file {StoredFileName} from '{FilePartialPath}'",
-            clientId, metadata.StoredFileName, metadata.FilePartialPath ?? string.Empty);
-        return NoContent();
+        return CreatedAtAction(nameof(Download), new { filePath = stored.FilePath },
+            UploadFileResponse.From(stored, originalFileName, GetContentType(stored.FileName)));
     }
 
     /// <summary>
-    /// Parses the <c>{file}</c> route value: <c>{id}.{ext}</c> as returned in <c>storedFileName</c>
-    /// (e.g. <c>7964b4d03c184c57b397a16490bef832.jpg</c>), or the bare 32-character id.
+    /// Downloads a file. <paramref name="filePath"/> is the <c>filePath</c> returned by the upload,
+    /// e.g. <c>invoices/2026/11/7964b4d0...832.jpg</c>. HEAD returns only the headers (size, type, last modified).
     /// </summary>
-    private static bool TryParseFileReference(string file, out string fileId, out string? extension)
+    [HttpGet("{**filePath}")]
+    [HttpHead("{**filePath}")]
+    [Authorize(Policy = StoragePolicies.Read)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Download(string? filePath, CancellationToken cancellationToken)
     {
-        fileId = string.Empty;
-        extension = null;
-
-        if (file.Length < 32)
+        var clientId = User.GetClientId();
+        var file = await storage.OpenReadAsync(clientId, filePath ?? string.Empty, cancellationToken);
+        if (file is null)
         {
-            return false;
+            return NotFound();
         }
 
-        var id = file[..32].ToLowerInvariant();
-        var rest = file[32..];
-        if (!StorageIdentifiers.FileId().IsMatch(id) || (rest.Length > 0 && rest[0] != '.'))
+        if (HttpMethods.IsGet(Request.Method))
         {
-            return false;
+            logger.LogInformation("Client {ClientId} downloaded {FilePath}", clientId, file.FilePath);
         }
 
-        fileId = id;
-        extension = rest.Length > 0 ? rest : null;
-        return true;
+        // FileStreamResult disposes the stream; range requests allow resumable downloads.
+        var etag = new EntityTagHeaderValue($"\"{file.SizeBytes:x}-{file.LastModifiedUtc.UtcTicks:x}\"");
+        return File(file.Content, GetContentType(file.FileName), file.FileName, file.LastModifiedUtc, etag,
+            enableRangeProcessing: true);
     }
 
-    /// <summary>A given extension must match the stored file (".jpg") or the original file name; otherwise it's a 404.</summary>
-    private static bool ExtensionMatches(StoredFileMetadata metadata, string? extension) =>
-        extension is null ||
-        string.Equals(extension, Path.GetExtension(metadata.StoredFileName), StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(extension, Path.GetExtension(metadata.FileName), StringComparison.OrdinalIgnoreCase);
+    /// <summary>Deletes a file. <paramref name="filePath"/> is the <c>filePath</c> returned by the upload.</summary>
+    [HttpDelete("{**filePath}")]
+    [Authorize(Policy = StoragePolicies.Delete)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(string? filePath, CancellationToken cancellationToken)
+    {
+        var clientId = User.GetClientId();
+        if (!await storage.DeleteAsync(clientId, filePath ?? string.Empty, cancellationToken))
+        {
+            return NotFound();
+        }
+
+        logger.LogInformation("Client {ClientId} deleted {FilePath}", clientId, filePath);
+        return NoContent();
+    }
+
+    // Content type comes from the extension, not from the caller, so a client cannot label a file as something else.
+    private static string GetContentType(string fileName) =>
+        ContentTypes.TryGetContentType(fileName, out var contentType) ? contentType : "application/octet-stream";
 
     private IActionResult InvalidField(string field, string message)
     {
         ModelState.AddModelError(field, message);
         return ValidationProblem(ModelState);
     }
-
-    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

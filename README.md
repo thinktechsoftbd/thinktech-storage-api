@@ -14,7 +14,7 @@ HTTPS. Each application authenticates with its own **client id + client secret**
  │     │                                                       │
  │     ▼                                                       │
  │  ThinkTech Storage API  (ASP.NET Core 10, 127.0.0.1:5080)   │
- │  Authentication · Upload · Download · Delete · Metadata     │
+ │  Authentication · Upload · Download · Delete                │
  │     │                                                       │
  │     ▼                                                       │
  │  /var/lib/thinktech-storage/{client-id}/...   (local disk)  │
@@ -32,19 +32,20 @@ SSH stays an admin-only door.
 | Method | Route | Scope | Description |
 |---|---|---|---|
 | `POST` | `/api/v1/auth/token` | – (anonymous) | Exchange client id + secret for a bearer token (valid 60 min) |
-| `POST` | `/api/v1/files` | `storage.write` | Upload (multipart: `file`, optional `filePartialPath`, `category`, `referenceId`, `metadata` JSON) |
-| `GET` | `/api/v1/files/{id}.{ext}` | `storage.read` | Download (supports `Range` for resumable downloads, `ETag` = SHA-256) |
-| `GET` | `/api/v1/files/{id}.{ext}/metadata` | `storage.read` | Stored name, folder, original file name, size, content type, SHA-256, category, reference, metadata, upload time |
-| `DELETE` | `/api/v1/files/{id}.{ext}` | `storage.delete` | Delete a file |
+| `POST` | `/api/v1/files` | `storage.write` | Upload (multipart: `file`, optional `filePartialPath`) |
+| `GET` | `/api/v1/files/{filePath}` | `storage.read` | Download (supports `Range` for resumable downloads) |
+| `HEAD` | `/api/v1/files/{filePath}` | `storage.read` | Headers only: size, content type, last modified |
+| `DELETE` | `/api/v1/files/{filePath}` | `storage.delete` | Delete a file |
 | `GET` | `/health` | – (anonymous) | `Healthy` when the storage folder is writable |
 
 - **Isolation:** every client has its own folder. A client can never read or delete another client's files; it gets `404`.
-- **Folders:** send `filePartialPath` (e.g. `invoices/2026/11`) and the file is stored at
-  `{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}`. Without it, the file goes directly in the client's folder.
-  Folder names may contain letters, digits, spaces, `.`, `-` and `_`; `..` and hidden folders are rejected (`400`).
-- **Your app keeps the `storedFileName`.** Upload returns `storedFileName` (`{id}.{ext}`, e.g. `7964b4d0...832.jpg`)
-  and `id`. Store it in your ERP database next to the invoice, patient, etc. GET and DELETE need only that name; the
-  server remembers the folder. The bare `id` works too, and a wrong extension returns `404`.
+- **Only the file is stored.** Send `filePartialPath` (e.g. `invoices/2026/11`) and the file is saved as
+  `{RootPath}/{clientId}/{filePartialPath}/{id}.{ext}`, with nothing else next to it. Without `filePartialPath` it
+  goes directly in the client's folder. Folder names may contain letters, digits, spaces, `.`, `-` and `_`; `..`
+  and hidden folders are rejected (`400`).
+- **Your app keeps the `filePath`.** Upload returns `filePath` (e.g. `invoices/2026/11/7964b4d0...832.jpg`). Store it
+  in your ERP database next to the invoice, patient, etc., together with anything else you need (original file name,
+  category, ...), because the server keeps no metadata. GET and DELETE take that `filePath`. Downloads are named `{id}.{ext}`.
 - Errors use RFC 7807 `application/problem+json`. Status codes: `401` bad/missing token, `403` missing scope, `404` not found, `413` too large, `415` file type not allowed.
 
 ### Authentication flow
@@ -94,27 +95,24 @@ using var form = new MultipartFormDataContent
 {
     { new StreamContent(source), "file", "invoice-1001.pdf" },
     { new StringContent("invoices/2026/11"), "filePartialPath" },
-    { new StringContent("invoices"), "category" },
-    { new StringContent("INV-1001"), "referenceId" },
-    { new StringContent("""{"customer":"ACME Ltd"}"""), "metadata" },
 };
 var upload = await http.PostAsync("api/v1/files", form);
 upload.EnsureSuccessStatusCode();
 var stored = await upload.Content.ReadFromJsonAsync<StoredFile>();
-Console.WriteLine($"Stored as {stored!.StoredFileName}");  // e.g. 7964b4d0...832.pdf - save it in your database
+Console.WriteLine($"Stored as {stored!.FilePath}");  // invoices/2026/11/7964b4d0...832.pdf - save it in your database
 
 // 3. Download
-await using (var download = await http.GetStreamAsync($"api/v1/files/{stored.StoredFileName}"))
+await using (var download = await http.GetStreamAsync($"api/v1/files/{stored.FilePath}"))
 await using (var target = File.Create(@"C:\temp\invoice-1001.pdf"))
 {
     await download.CopyToAsync(target);
 }
 
 // 4. Delete
-(await http.DeleteAsync($"api/v1/files/{stored.StoredFileName}")).EnsureSuccessStatusCode();
+(await http.DeleteAsync($"api/v1/files/{stored.FilePath}")).EnsureSuccessStatusCode();
 
 record TokenResponse(string access_token, string token_type, int expires_in, string scope);
-record StoredFile(string Id, string StoredFileName, string? FilePartialPath, string FileName, string ContentType, long SizeBytes, string Sha256);
+record StoredFile(string Id, string FilePath, string FileName, string OriginalFileName, string ContentType, long SizeBytes, string Sha256);
 ```
 
 ---
@@ -130,7 +128,7 @@ The API listens on `http://localhost:5059` and stores files in `src/ThinkTech.St
 configuration: a dev signing key and two **development-only** clients (`dev-console` with full access,
 `dev-readonly` with read only). Their secrets are in
 [`ThinkTech.Storage.Api.http`](src/ThinkTech.Storage.Api/ThinkTech.Storage.Api.http), which walks through
-token → upload → metadata → download → delete.
+token → upload → download → delete.
 
 `appsettings.json` is **excluded from `dotnet publish`**, so the dev key and dev clients never reach the
 server. The server gets its own complete settings file (see [Deploy](#deploy-to-the-vps-ubuntu--debian)).
@@ -241,7 +239,7 @@ Settings and stored files are outside `/opt/thinktech-storage-api`, and the publ
 - [ ] If the root password was ever shared (chat, email, docs), change it.
 - [ ] `sudo apt install fail2ban unattended-upgrades`.
 - [ ] Only ports 22, 80 and 443 are open (`ufw status`). Port 5080 is bound to localhost only.
-- [ ] Back up `/var/lib/thinktech-storage` and `/etc/thinktech-storage` off the server (e.g. `restic` or `rsync` nightly). Each file's `.json` sidecar carries its metadata, so a plain file copy is a complete backup.
+- [ ] Back up `/var/lib/thinktech-storage` and `/etc/thinktech-storage` off the server (e.g. `restic` or `rsync` nightly). There is no database or metadata, so a plain file copy is a complete backup.
 - [ ] Monitor disk space and `GET /health`.
 
 ---
@@ -274,17 +272,14 @@ startup and refuses to run with a missing key or a malformed client.
 /var/lib/thinktech-storage/
   bizone-erp/
     invoices/2026/11/
-      3fa1c0...e9.jpg         <- file content: server-generated id + the uploaded file's extension
-    .metadata/3f/a1/
-      3fa1c0...e9.json        <- metadata: folder, original name, size, SHA-256, category, reference, ...
+      3fa1c0...e9.jpg         <- the uploaded file: server-generated id + its original extension
   medidesk/
     ...
 ```
 
-The content file is stored unchanged (not encrypted), so it opens directly with its extension. A file without
-a usable extension is stored as `{id}.bin`. The hidden `.metadata` index records where each file lives, which is
-how GET and DELETE find a file by `{id}.{ext}` alone; its two levels of shard folders stay small even with
-millions of files.
+Only the uploaded file is stored, unchanged (not encrypted), so it opens directly with its extension. A file
+without a usable extension is stored as `{id}.bin`. There are no metadata files: the calling app keeps the
+`filePath` returned by the upload.
 
 The folder comes from the validated `filePartialPath` (safe names only, always inside the client's folder) and
 the file name is a server-generated id, so path traversal is impossible.
@@ -297,7 +292,7 @@ src/ThinkTech.Storage.Api/
   Authentication/                 secret hashing, credential check, token issuing, scopes
   Configuration/                  strongly typed + validated options
   Contracts/                      request/response DTOs
-  Controllers/                    AuthController (token), FilesController (upload/download/delete/metadata)
+  Controllers/                    AuthController (token), FilesController (upload/download/delete)
   Storage/                        IFileStorage, LocalFileStorage, health check, upload validation
   Tools/                          generate-client / generate-signing-key admin commands
 deploy/                           systemd unit, nginx site, server settings template

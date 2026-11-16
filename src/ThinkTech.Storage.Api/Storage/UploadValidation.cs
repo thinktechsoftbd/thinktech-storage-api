@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 
 namespace ThinkTech.Storage.Api.Storage;
 
@@ -91,61 +90,35 @@ public static class FilePartialPathParser
     }
 }
 
-public static class UploadMetadataParser
+/// <summary>
+/// Parses a <c>filePath</c> returned by an upload, e.g. <c>invoices/2026/11/7964b4d03c184c57b397a16490bef832.jpg</c>,
+/// into its folder and file name. Only paths the storage could have produced are accepted.
+/// </summary>
+public static class StoredFilePathParser
 {
-    private const int MaxEntries = 32;
-    private const int MaxKeyLength = 64;
-    private const int MaxValueLength = 1024;
-
-    public static bool TryParse(string? json, out Dictionary<string, string> metadata, out string? error)
+    public static bool TryParse(string? value, out string filePartialPath, out string fileName)
     {
-        metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        error = null;
+        filePartialPath = string.Empty;
+        fileName = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(json))
+        if (string.IsNullOrWhiteSpace(value))
         {
-            return true;
-        }
-
-        Dictionary<string, string>? parsed;
-        try
-        {
-            parsed = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-        }
-        catch (JsonException)
-        {
-            error = "Metadata must be a JSON object with string values, e.g. {\"invoiceNo\":\"INV-1001\"}.";
             return false;
         }
 
-        if (parsed is null)
-        {
-            return true;
-        }
+        var path = value.Replace('\\', '/').Trim('/');
+        var lastSlash = path.LastIndexOf('/');
+        var name = path[(lastSlash + 1)..].ToLowerInvariant(); // stored names are always lowercase
+        var folder = lastSlash < 0 ? string.Empty : path[..lastSlash];
 
-        if (parsed.Count > MaxEntries)
+        if (!StorageIdentifiers.DataFileName().IsMatch(name) ||
+            !FilePartialPathParser.TryNormalize(folder, out var normalizedFolder, out _))
         {
-            error = $"Metadata can contain at most {MaxEntries} entries.";
             return false;
         }
 
-        foreach (var (key, value) in parsed)
-        {
-            if (string.IsNullOrWhiteSpace(key) || key.Length > MaxKeyLength)
-            {
-                error = $"Metadata keys must be 1-{MaxKeyLength} characters.";
-                return false;
-            }
-
-            if (value is null || value.Length > MaxValueLength)
-            {
-                error = $"Metadata values must be non-null and at most {MaxValueLength} characters.";
-                return false;
-            }
-
-            metadata[key] = value;
-        }
-
+        filePartialPath = normalizedFolder;
+        fileName = name;
         return true;
     }
 }
